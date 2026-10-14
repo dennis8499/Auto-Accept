@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { inflateRawSync } = require('node:zlib');
 
 const root = path.resolve(__dirname, '..');
-const bytes = fs.readFileSync(path.join(root, 'codex-auto-accept-0.1.0.vsix'));
+const bytes = fs.readFileSync(path.join(root, 'codex-auto-accept-0.1.1.vsix'));
 let end = bytes.length - 22;
 while (end >= Math.max(0, bytes.length - 65557) && bytes.readUInt32LE(end) !== 0x06054b50) end--;
 assert.ok(end >= 0, 'ZIP central directory must exist');
@@ -32,14 +32,17 @@ for (let index = 0; index < count; index++) {
 }
 const manifest = JSON.parse(files.get('extension/package.json').toString('utf8'));
 assert.equal(manifest.name, 'codex-auto-accept');
-assert.equal(manifest.version, '0.1.0');
+assert.equal(manifest.version, '0.1.1');
 assert.equal(manifest.publisher, 'local-codex');
 assert.equal(manifest.displayName, 'Codex Auto-Accept');
 assert.deepEqual(manifest.contributes.commands.map(command => command.command), ['codexAutoAccept.toggle']);
 for (const name of ['extension', 'codexCommand', 'terminalScreen', 'approvalPrompt', 'autoAcceptSession']) {
   assert.ok(files.has('extension/out/' + name + '.js'), 'compiled ' + name);
+  assert.ok(files.get('extension/out/' + name + '.js').equals(fs.readFileSync(path.join(root, 'out', name + '.js'))),
+    'packaged module matches the local build: ' + name);
 }
 assert.ok(files.get('extension/readme.md').toString('utf8').includes('PowerShell 7'));
+assert.ok(files.get('extension/readme.md').toString('utf8').includes('等待 Codex'));
 assert.ok(files.has('extension/UPSTREAM.md'));
 assert.equal(files.get('extension/LICENSE.txt').toString('utf8').replace(/\r\n/g, '\n'),
   fs.readFileSync(path.join(root, 'LICENSE'), 'utf8').replace(/\r\n/g, '\n'));

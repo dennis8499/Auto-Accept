@@ -89,10 +89,15 @@ export async function run(): Promise<void> {
     assert.equal(await result(a, 'arm-waiting'), 'y');
     reports.push('PASS arm-waiting');
     for (const kind of ['command', 'edit', 'network', 'input', 'permissions']) await expect(a, kind, 'native-' + kind, 'y');
+    for (const scenario of ['reason', 'program', 'git']) await expect(a, scenario, 'regression-' + scenario, 'y');
+    await expect(a, 'sequence', 'consecutive-and-identical', 'yyyy');
     await expect(b, 'command', 'terminal-isolation', 'NONE');
     await expect(a, 'question', 'question-manual', 'NONE');
     await expect(a, 'mcp', 'mcp-manual', 'NONE');
     await expect(a, 'unknown', 'unknown-manual', 'NONE');
+    await expect(a, 'incomplete', 'incomplete-manual', 'NONE');
+    await expect(a, 'history', 'history-question-manual', 'NONE');
+    await expect(a, 'historyMenu', 'history-generic-menu-manual', 'NONE');
     await expect(a, 'command', 'other-program', 'NONE', true);
     await toggle(a);
     await expect(a, 'command', 'disarmed', 'NONE');
@@ -102,7 +107,7 @@ export async function run(): Promise<void> {
       const liveRoot = path.join(cache, 'live-workspace', String(Date.now()));
       fs.mkdirSync(liveRoot, { recursive: true });
       const artifact = path.join(liveRoot, 'codex-live-smoke.txt');
-      const prompt = 'This is an authorized smoke test of a terminal approval extension. Use exec_command with sandbox_permissions require_escalated to run a PowerShell command that writes the exact text codex-auto-accept-ok to codex-live-smoke.txt in the current working directory. Make exactly this one file change, request approval for the command, and then stop. Do not edit any other files or ask any questions.';
+      const prompt = 'This is an authorized smoke test of a terminal approval extension. Use exec_command with sandbox_permissions require_escalated to run a PowerShell command that writes the exact text codex-auto-accept-ok to codex-live-smoke.txt in the current working directory. Set justification to the exact text "This command needs your approval to validate the extension." Make exactly this one file change, request approval for the command, and then stop. Do not edit any other files or ask any questions.';
       traces.set(a, '');
       endings.delete(a);
       const command = '& ' + quote(process.env.CODEX_AUTO_ACCEPT_LIVE_CLI) +
@@ -119,6 +124,7 @@ export async function run(): Promise<void> {
       const visibleTrace = (traces.get(a) ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\s+/g, ' ');
       assert.ok(visibleTrace.includes('Would you like to run the following command?'), 'live CLI must have requested command approval');
       assert.ok(visibleTrace.includes('Yes, proceed (y)'), 'live CLI must have offered the single-use shortcut');
+      assert.ok(visibleTrace.includes('This command needs your approval to validate the extension.'), 'live CLI must exercise approval wording in the reason');
       reports.push('PASS live-codex-cli');
       console.log('PASS live-codex-cli');
       a.sendText('\x03', false);

@@ -68,6 +68,15 @@ test('a completed frame resolves an approval before an immediately identical nex
   clock.advance(120);
   assert.equal(sends.length, 2);
 });
+test('coalesced terminal output preserves resolution before an identical next approval', () => {
+  const { value, clock, sends } = session();
+  value.setArmed(true);
+  value.write(frame(approval()));
+  clock.advance(120);
+  value.write(frame('Working...') + frame(approval()));
+  clock.advance(120);
+  assert.equal(sends.length, 2);
+});
 test('an authoritative resolution also closes a pending raw-output grace period', () => {
   const { value, clock, sends } = session();
   value.setArmed(true);
@@ -158,4 +167,66 @@ test('independent terminals retain independent arming state', () => {
   b.clock.advance(500);
   assert.equal(a.sends.length, 1);
   assert.equal(b.sends.length, 0);
+});
+
+test('command, program and Git approvals with question-like descriptions each send once', () => {
+  const { value, clock, sends } = session();
+  value.setArmed(true);
+  for (const command of ['Write-Output "needs your approval"', 'node -e "console.log(\'```\')"', 'git commit -m "Question 1/1"']) {
+    const prompt = frame(approval('command', command));
+    value.write(prompt);
+    clock.advance(120);
+    value.write(prompt);
+    clock.advance(1000);
+    value.write(frame('Working...'));
+    clock.advance(180);
+  }
+  assert.equal(sends.length, 3);
+});
+
+test('diagnostics are stable, deduplicated per card and repeat for a later request', () => {
+  const { value, clock, events } = session();
+  value.setArmed(true);
+  const unsupported = action => frame(approval('command', action).replace('proceed (y)', 'proceed (q)'));
+  value.write(unsupported('git status'));
+  clock.advance(119);
+  assert.equal(events.length, 0);
+  clock.advance(1);
+  for (let index = 0; index < 5; index++) {
+    value.write(unsupported('git status'));
+    clock.advance(200);
+  }
+  assert.equal(events.filter(event => event.type === 'unsupported').length, 1);
+  value.write(unsupported('node --version'));
+  clock.advance(120);
+  assert.equal(events.filter(event => event.type === 'unsupported').length, 2);
+  value.write(frame('Working...'));
+  clock.advance(180);
+  value.write(unsupported('git status'));
+  clock.advance(120);
+  assert.equal(events.filter(event => event.type === 'unsupported').length, 3);
+});
+
+test('a partial repaint that becomes a supported card does not report a stale diagnostic', () => {
+  const { value, clock, events, sends } = session();
+  value.setArmed(true);
+  value.write(frame('Would you like to run the following command?'));
+  clock.advance(60);
+  value.write(frame(approval()));
+  clock.advance(120);
+  assert.equal(sends.length, 1);
+  assert.equal(events.filter(event => event.type === 'unsupported').length, 0);
+});
+
+test('disarming and disposal cancel pending diagnostics', () => {
+  for (const stop of ['disarm', 'dispose']) {
+    const { value, clock, events } = session();
+    value.setArmed(true);
+    value.write(frame('Would you like to run the following command?'));
+    if (stop === 'disarm') value.setArmed(false);
+    else value.dispose();
+    clock.advance(1000);
+    assert.equal(events.length, 0);
+    assert.equal(clock.tasks.size, 0);
+  }
 });

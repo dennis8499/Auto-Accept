@@ -25,6 +25,19 @@ fs.writeFileSync(path.join(cache, 'prompts.json'), JSON.stringify({
   question: frame('Question 1/1 (1 unanswered)\r\nChoose an option.\r\n› 1. Yes\r\n  2. No\r\ntab to add notes | enter to submit answer | esc to interrupt'),
   mcp: frame('example needs your approval.\r\n› 1. Yes, provide the requested info (y)\r\n  2. No, but continue without it (n)\r\n' + FOOTER),
   unknown: frame(approval().replace('proceed (y)', 'proceed (q)')),
+  reason: frame(approval('command', 'Write-Output ok').replace('requested operation', 'This command needs your approval')),
+  program: frame(approval('command', 'node -e "console.log(\'```\')"')),
+  git: frame(approval('command', 'git commit -m "Question 1/1"').replace('requested operation', 'Inspect Yes, provide the requested info text')),
+  incomplete: frame(approval().replace('  3. No, and tell Codex what to do differently (esc)', '')),
+  history: frame(approval() + '\r\nQuestion 1/1 (1 unanswered)\r\n› 1. Yes, proceed (y)\r\n  2. No\r\nenter to submit answer'),
+  historyMenu: frame(approval() + '\r\nWould you like to continue the discussion?\r\n› 1. Yes, proceed (y)\r\n  2. No, and tell Codex what to do differently (esc)\r\n' + FOOTER),
+  sequence: [
+    frame(approval('command', 'Write-Output "needs your approval"')),
+    frame(approval('command', 'node -e "console.log(\'```\')"')),
+    frame(approval('command', 'git status')),
+    frame(approval('command', 'git status')),
+  ],
+  working: frame('Working...'),
 }));
 const defaultCode = process.platform === 'win32'
   ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'Microsoft VS Code', 'Code.exe')

@@ -25,6 +25,24 @@ test('a title embedded in prose cannot impersonate the native header', () => {
 test('numbered strings in a command are not menu items', () => {
   assert.equal(detect(frame(approval('command', "echo '1. Yes, proceed (y)'"))).prompt?.kind, 'command');
 });
+test('approval wording and code fences in operation descriptions are not questions', () => {
+  for (const phrase of ['needs your approval', 'Yes, provide the requested info', 'Question 1/1', '```']) {
+    for (const text of [
+      approval('command', 'git status').replace('requested operation', 'Inspect text containing ' + phrase),
+      approval('command', 'node -e "console.log(\'' + phrase + '\')"'),
+    ]) assert.equal(detect(frame(text)).prompt?.kind, 'command', phrase);
+  }
+});
+test('selection markers and confirmation text inside commands are not menu controls', () => {
+  const text = approval('command', 'echo "› 1. Yes, proceed (y)"').replace('\r\n› 1.', '\r\n  1.');
+  assert.equal(detect(frame(text)).prompt, undefined);
+  assert.equal(detect(frame(approval().replace(FOOTER, '  Explanation: ' + FOOTER.trim()))).prompt, undefined);
+});
+test('truncated confirmation footers report why the native card cannot be accepted', () => {
+  const result = detect(frame(approval().replace(FOOTER, '')));
+  assert.equal(result.state, 'partial');
+  assert.match(result.reason, /確認提示/);
+});
 test('leaves normal questions and MCP forms unanswered', () => {
   for (const text of [
     'Question 1/1 (1 unanswered)\r\nChoose an option.\r\n› 1. Yes, proceed (y)\r\n  2. No\r\nenter to submit answer',
@@ -44,6 +62,16 @@ test('ignores an old card with a composer or another question below it', () => {
   for (const suffix of ['\r\n› Tell Codex what to do', '\r\nQuestion 1/1\r\n› 1. First choice', '\r\n' + String.fromCharCode(96).repeat(3)]) {
     assert.equal(detect(frame(approval() + suffix)).prompt, undefined);
   }
+});
+test('native card examples inside active questions and MCP forms stay manual', () => {
+  for (const suffix of [
+    '\r\nQuestion 1/1 (1 unanswered)\r\n› 1. Yes, proceed (y)\r\n  2. No\r\nenter to submit answer',
+    '\r\nexample needs your approval.\r\n› 1. Yes, provide the requested info (y)\r\n  2. No, but continue without it (n)\r\n' + FOOTER,
+  ]) assert.equal(detect(frame(approval() + suffix)).prompt, undefined);
+});
+test('a later generic menu with the native footer does not reuse a historical approval title', () => {
+  const question = 'Would you like to continue the discussion?\r\n› 1. Yes, proceed (y)\r\n  2. No, and tell Codex what to do differently (esc)\r\n' + FOOTER;
+  assert.equal(detect(frame(approval() + '\r\n' + question)).prompt, undefined);
 });
 test('handles wrapped titles, options and footer', () => {
   const text = approval('permissions')

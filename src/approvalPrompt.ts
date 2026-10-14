@@ -6,6 +6,7 @@ export interface ApprovalDetection {
   state: 'approval' | 'partial' | 'other';
   prompt?: ApprovalPrompt;
   reason?: string;
+  fingerprint?: string;
 }
 
 const FOOTER = 'Press enter to confirm or esc to cancel';
@@ -33,42 +34,50 @@ export function detectApproval(snapshot: ScreenSnapshot): ApprovalDetection {
   }
   const text = textLines.join(' ');
   const footer = text.lastIndexOf(FOOTER);
-  if (footer < 0) {
-    const nativeHeader = HEADERS.some(header => header.pattern.test(text));
-    return { state: nativeHeader ? 'partial' : 'other' };
-  }
-  // Any composer, question or other content after this footer means it is history.
-  const suffix = text.slice(footer + FOOTER.length).trim();
-  if (suffix && !/^or \S+ to open thread$/.test(suffix)) return { state: 'other' };
-
   let selected: { kind: ApprovalKind; label: string; start: number } | undefined;
   for (const header of HEADERS) {
     const pattern = new RegExp(header.pattern.source, 'g');
-    for (const match of text.slice(0, footer).matchAll(pattern)) {
+    for (const match of (footer < 0 ? text : text.slice(0, footer)).matchAll(pattern)) {
       if (!lineStarts.has(match.index!) || !lineEnds.has(match.index! + match[0].length)) continue;
       if (!selected || match.index! > selected.start) selected = { kind: header.kind, label: header.label, start: match.index! };
     }
   }
+  if (footer < 0) return selected ? {
+    state: 'partial',
+    reason: '核准確認提示未完整顯示，請放大終端或手動核准',
+    fingerprint: `${selected.kind}:${text.slice(selected.start)}`,
+  } : { state: 'other' };
+  // A quoted footer or content after it is not an active native approval.
+  const suffix = text.slice(footer + FOOTER.length).trim();
+  if (!lineStarts.has(footer) || (suffix && !/^or \S+ to open thread$/.test(suffix))) return { state: 'other' };
   if (!selected) return { state: 'other', reason: '不是已支援的 Codex 操作核准' };
   const block = text.slice(selected.start, footer).trim();
-  if (/Question\s+\d+\s*\/\s*\d+|needs your approval|Yes, provide the requested info|```/.test(block)) {
-    return { state: 'other', reason: '一般提問或資料填寫表單保留手動回答' };
-  }
-
-  const options = [...block.matchAll(/(?:[›❯]\s*)?\b(\d+)\.\s+([\s\S]*?)(?=\s+(?:[›❯]\s*)?\d+\.\s+|$)/g)]
+  const fingerprint = `${selected.kind}:${block.replace(/[›❯]\s*(?=\d+\.)/g, '')}`;
+  // Description text is opaque: only line-start menu rows define UI controls.
+  const starts = [...block.matchAll(/(?:[›❯]\s*)?\b(\d+)\.\s+/g)]
     .filter(option => lineStarts.has(selected!.start + option.index!));
-  const first = options.filter(option => option[1] === '1').pop();
-  const hasSelection = /[›❯]\s*\d+\.\s/.test(block);
-  const hasDeny = options.some(option => option.index! > (first?.index ?? Infinity) &&
-    /^No, (?:and tell Codex what to do differently|continue without running it|continue without permissions) \((?:esc|d)\)$/.test(option[2].trim()));
-  if (!hasSelection || first?.[2].trim() !== selected.label) {
-    return { state: 'partial', reason: '核准格式或快捷鍵未知，沒有送出輸入' };
+  const options = starts.map((option, index) => ({
+    number: option[1],
+    start: option.index!,
+    selected: /^[›❯]/.test(option[0]),
+    label: block.slice(option.index! + option[0].length, starts[index + 1]?.index ?? block.length).trim(),
+  }));
+  const containsCompletedMenu = [...block.matchAll(/Press enter to confirm or esc to cancel/g)].some(earlierFooter =>
+    lineStarts.has(selected!.start + earlierFooter.index!) && options.some(option =>
+      option.number === '1' && option.label === selected!.label && option.start < earlierFooter.index!));
+  if (containsCompletedMenu) return { state: 'other', reason: '目前選單不是已支援的 Codex 操作核准，先前核准畫面僅為歷史' };
+  const first = options.filter(option => option.number === '1').pop();
+  const hasSelection = options.some(option => option.selected);
+  const hasDeny = options.some(option => option.start > (first?.start ?? Infinity) &&
+    /^No, (?:and tell Codex what to do differently|continue without running it|continue without permissions) \((?:esc|d)\)$/.test(option.label));
+  if (!hasSelection || first?.label !== selected.label) {
+    return { state: 'partial', reason: '核准格式或快捷鍵未知，沒有送出輸入', fingerprint };
   }
   if (!hasDeny) {
-    return { state: 'partial', reason: '核准選項未完整顯示，請放大終端或手動核准' };
+    return { state: 'partial', reason: '核准選項未完整顯示，請放大終端或手動核准', fingerprint };
   }
   return {
     state: 'approval',
-    prompt: { kind: selected.kind, fingerprint: `${selected.kind}:${block.replace(/[›❯]\s*(?=\d+\.)/g, '')}` },
+    prompt: { kind: selected.kind, fingerprint },
   };
 }

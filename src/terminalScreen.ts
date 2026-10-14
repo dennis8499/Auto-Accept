@@ -26,8 +26,15 @@ export class TerminalScreen {
   private scrollBottom = MAX_ROWS - 1;
   private issue?: string;
 
-  write(chunk: string): void {
-    for (const char of chunk) this.consume(char);
+  write(chunk: string, onFrame?: () => void): void {
+    for (const char of chunk) {
+      const previousFrame = this.frame;
+      this.consume(char);
+      if (onFrame && this.frame !== previousFrame) {
+        this.trim();
+        onFrame();
+      }
+    }
     this.trim();
   }
 
