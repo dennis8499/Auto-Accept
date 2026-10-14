@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/varfmx/claude-code-auto-accept.git"
+    "url": "https://github.com/dennis8499/Auto-Accept.git"
   },
   "engines": {
     "vscode": "^1.93.0"
