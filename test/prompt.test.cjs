@@ -1,0 +1,80 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { TerminalScreen } = require('../out/terminalScreen');
+const { detectApproval } = require('../out/approvalPrompt');
+const { ESC, FOOTER, approval, frame, detect } = require('./helpers.cjs');
+
+for (const kind of ['command', 'edit', 'network', 'input', 'permissions']) {
+  test('recognizes native ' + kind + ' approval', () => {
+    assert.equal(detect(frame(approval(kind))).prompt?.kind, kind);
+  });
+}
+test('accepts a single-use shortcut independently of the highlighted row', () => {
+  const text = approval().replace('› 1.', '  1.').replace('  3.', '› 3.');
+  assert.equal(detect(frame(text)).prompt?.kind, 'command');
+});
+test('requires a complete approval, not just a title or Yes', () => {
+  for (const text of ['› 1. Yes, proceed (y)', 'Would you like to run the following command?', approval().replace(FOOTER, '')]) {
+    assert.equal(detect(frame(text)).prompt, undefined);
+  }
+});
+test('a title embedded in prose cannot impersonate the native header', () => {
+  const text = approval().replace('Would you like to run', 'Explanation: Would you like to run');
+  assert.equal(detect(frame(text)).prompt, undefined);
+});
+test('numbered strings in a command are not menu items', () => {
+  assert.equal(detect(frame(approval('command', "echo '1. Yes, proceed (y)'"))).prompt?.kind, 'command');
+});
+test('leaves normal questions and MCP forms unanswered', () => {
+  for (const text of [
+    'Question 1/1 (1 unanswered)\r\nChoose an option.\r\n› 1. Yes, proceed (y)\r\n  2. No\r\nenter to submit answer',
+    'test-server needs your approval.\r\n› 1. Yes, provide the requested info (y)\r\n  2. No, but continue without it (n)\r\n' + FOOTER,
+    'Would you like to continue the discussion?\r\n› 1. Yes, proceed (y)\r\n  2. No, and tell Codex what to do differently (esc)\r\n' + FOOTER,
+  ]) assert.equal(detect(frame(text)).prompt, undefined);
+});
+test('unknown shortcut, missing refusal, and session-only choices never send', () => {
+  for (const text of [
+    approval().replace('Yes, proceed (y)', 'Yes, proceed (q)'),
+    approval().replace('No, and tell Codex what to do differently (esc)', 'Maybe'),
+    approval().replace('Yes, proceed (y)', 'Yes, allow for this session (y)'),
+    approval().replace('›', ' '),
+  ]) assert.equal(detect(frame(text)).prompt, undefined);
+});
+test('ignores an old card with a composer or another question below it', () => {
+  for (const suffix of ['\r\n› Tell Codex what to do', '\r\nQuestion 1/1\r\n› 1. First choice', '\r\n' + String.fromCharCode(96).repeat(3)]) {
+    assert.equal(detect(frame(approval() + suffix)).prompt, undefined);
+  }
+});
+test('handles wrapped titles, options and footer', () => {
+  const text = approval('permissions')
+    .replace('grant these permissions?', 'grant these\r\n  permissions?')
+    .replace('for this turn (y)', 'for this\r\n     turn (y)')
+    .replace('confirm or esc', 'confirm or\r\n  esc');
+  assert.equal(detect(frame(text)).prompt?.kind, 'permissions');
+});
+test('supports Codex approvals from a labeled thread', () => {
+  const text = approval().replace(FOOTER, FOOTER + ' or t to open thread');
+  assert.equal(detect(frame(text)).prompt?.kind, 'command');
+});
+test('ANSI styles and OSC links do not pollute detection', () => {
+  const text = approval().replace('echo hello', ESC + ']8;;https://example.com' + ESC + '\\' + 'echo hello' + ESC + ']8;;' + '\x07')
+    .replace('› 1.', ESC + '[1;7m› 1.' + ESC + '[0m');
+  assert.equal(detect(frame(text)).prompt?.kind, 'command');
+});
+test('detects only after split CSI and synchronized updates finish', () => {
+  const screen = new TerminalScreen();
+  const text = frame(approval());
+  for (const char of text.slice(0, -1)) {
+    screen.write(char);
+    assert.equal(detectApproval(screen.snapshot()).prompt, undefined);
+  }
+  screen.write(text.slice(-1));
+  assert.equal(detectApproval(screen.snapshot()).prompt?.kind, 'command');
+});
+test('a removed row and cleared display cannot leave stale approvals', () => {
+  const screen = new TerminalScreen();
+  screen.write(frame(approval()));
+  assert.equal(detectApproval(screen.snapshot()).prompt?.kind, 'command');
+  screen.write(ESC + '[2J' + ESC + '[HWorking...');
+  assert.equal(detectApproval(screen.snapshot()).prompt, undefined);
+});

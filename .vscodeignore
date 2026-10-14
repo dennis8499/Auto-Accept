@@ -1,0 +1,15 @@
+.vscode/**
+src/**
+tsconfig.json
+node_modules/**
+.gitignore
+**/*.map
+test/**
+scripts/**
+out/test/**
+.vscode-test/**
+.cache/**
+package-lock.json
+*.vsix
+debug.log
+*.zip

@@ -1,0 +1,46 @@
+{
+  "name": "codex-auto-accept",
+  "displayName": "Codex Auto-Accept",
+  "description": "自動接受 VS Code 終端中 Codex CLI 的單次操作核准，保留一般提問手動回答。",
+  "version": "0.1.0",
+  "publisher": "local-codex",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/varfmx/claude-code-auto-accept.git"
+  },
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexAutoAccept.toggle",
+        "title": "Codex Auto-Accept: 切換目前終端的自動核准"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test test/*.test.cjs",
+    "test:integration": "npm run compile && node scripts/run-integration.cjs",
+    "package": "vsce package --no-dependencies --allow-missing-repository --out codex-auto-accept-0.1.0.vsix",
+    "verify:package": "node scripts/verify-package.cjs"
+  },
+  "devDependencies": {
+    "@types/vscode": "1.93.0",
+    "@types/node": "^20.19.0",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.0.0",
+    "typescript": "5.9.3"
+  }
+}
