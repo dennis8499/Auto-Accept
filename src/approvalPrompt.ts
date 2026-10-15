@@ -1,7 +1,7 @@
 import { ScreenSnapshot } from './terminalScreen';
 
 export type ApprovalKind = 'command' | 'edit' | 'network' | 'input' | 'permissions';
-export interface ApprovalPrompt { kind: ApprovalKind; fingerprint: string }
+export interface ApprovalPrompt { kind: ApprovalKind; fingerprint: string; content: string }
 export interface ApprovalDetection {
   state: 'approval' | 'partial' | 'other';
   prompt?: ApprovalPrompt;
@@ -21,15 +21,18 @@ const HEADERS: Array<{ kind: ApprovalKind; pattern: RegExp; label: string }> = [
 /** Match an active native approval card, never an isolated Yes or a chat question. */
 export function detectApproval(snapshot: ScreenSnapshot): ApprovalDetection {
   if (!snapshot.complete) return { state: 'partial', reason: snapshot.issue };
-  const lines = snapshot.lines.slice(-128).map(line => line.trim());
-  while (lines.length && !lines[lines.length - 1]) lines.pop();
-  const textLines = lines.map(line => line.replace(/\s+/g, ' ')).filter(Boolean);
+  const sourceLines = snapshot.lines.slice(-128);
+  const textLines = sourceLines.map(line => line.trim().replace(/\s+/g, ' ')).filter(Boolean);
   const lineStarts = new Set<number>();
   const lineEnds = new Set<number>();
+  const sourceRows = new Map<number, number>();
   let offset = 0;
-  for (const line of textLines) {
+  for (const [row, source] of sourceLines.entries()) {
+    const line = source.trim().replace(/\s+/g, ' ');
+    if (!line) continue;
     lineStarts.add(offset);
     lineEnds.add(offset + line.length);
+    sourceRows.set(offset, row);
     offset += line.length + 1;
   }
   const text = textLines.join(' ');
@@ -76,8 +79,11 @@ export function detectApproval(snapshot: ScreenSnapshot): ApprovalDetection {
   if (!hasDeny) {
     return { state: 'partial', reason: '核准選項未完整顯示，請放大終端或手動核准', fingerprint };
   }
+  // Map validated UI boundaries back to screen rows, retaining operation formatting.
+  const contentLines = sourceLines.slice(sourceRows.get(selected.start), sourceRows.get(selected.start + first!.start));
+  while (contentLines.length && !contentLines[contentLines.length - 1].trim()) contentLines.pop();
   return {
     state: 'approval',
-    prompt: { kind: selected.kind, fingerprint },
+    prompt: { kind: selected.kind, fingerprint, content: contentLines.join('\n') },
   };
 }

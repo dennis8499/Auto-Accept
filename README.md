@@ -6,10 +6,10 @@
 
 需要 VS Code 1.93 以上，以及已安裝並登入的 Codex CLI。終端必須啟用 [Shell Integration](https://code.visualstudio.com/docs/terminal/shell-integration)。Windows 請使用 **PowerShell 7（pwsh）** 或 Git Bash；Windows PowerShell 5 不支援自動注入 Shell Integration。
 
-使用本機建置的 `codex-auto-accept-0.1.1.vsix`，或從 [GitHub Releases](https://github.com/dennis8499/Auto-Accept/releases/latest) 下載已發布的版本，再於 VS Code 的擴充套件頁面選擇「… → Install from VSIX…」開啟它。也可以在這個專案目錄執行：
+使用本機建置的 `codex-auto-accept-0.1.2.vsix`，或從 [GitHub Releases](https://github.com/dennis8499/Auto-Accept/releases/latest) 下載已發布的版本，再於 VS Code 的擴充套件頁面選擇「… → Install from VSIX…」開啟它。也可以在這個專案目錄執行：
 
 ```powershell
-code --install-extension .\codex-auto-accept-0.1.1.vsix
+code --install-extension .\codex-auto-accept-0.1.2.vsix
 ```
 
 安裝後重新開啟終端並執行 `codex`。
@@ -51,7 +51,13 @@ code --install-extension .\codex-auto-accept-0.1.1.vsix
 
 ## 排除問題
 
-開啟 **View → Output → Codex Auto-Accept**，或將滑鼠移到狀態列查看目前原因。日誌只記錄核准種類、監看狀態及未處理原因，不記錄操作指令內容。同一提示的相同診斷不會反覆刷日誌；一般重繪途中短暫不完整的畫面會等穩定後才記錄。
+開啟 **View → Output → Codex Auto-Accept** 查看 Audit Log，或將滑鼠移到狀態列查看目前原因。頻道使用 VS Code 原生 `LogOutputChannel`，每筆訊息是單行 JSON，外層由 VS Code 加上時間與日誌等級。請將頻道等級設為 **Info、Debug 或 Trace** 查看完整事件；Warning 或 Error 會省略一般操作紀錄。
+
+日誌記錄擴充套件啟停、終端開關、Shell Integration 就緒、監看開始／結束、核准送出、未支援提示與錯誤。共用欄位為 `timestamp`（UTC ISO 8601）、`event` 與 `runId`；終端事件另有 `terminalId`、`terminalName`，工作階段事件另有 `sessionId`。識別碼可區分同名終端及連續執行；結束原因與當時取得的 `exitCode` 也會記錄。
+
+`approval.sent` 表示已送出單次核准輸入，包含 `kind` 與 `content`，不代表操作已成功執行。`content` 保留確認當下可見的核准標題、理由、指令、檔案差異或其他操作內容，排除核准選單及歷史畫面；換行、引號及控制字元以 JSON 跳脫保存。內容不自動摘要或遮罩，CLI 省略或畫面未顯示的資訊不補推。
+
+日誌檔案由 VS Code 保存及清理。可在命令選單執行 **Developer: Open Logs Folder**，於目前或過去工作階段的 `window*/exthost` 下尋找 `Codex Auto-Accept.log`（檔名前可能有編號）。重新開啟 VS Code 後，Output 顯示新的工作階段；舊紀錄從日誌資料夾查看，保存期限依 VS Code 原生清理規則。同一提示重繪不會重複記錄核准或相同診斷；一般重繪途中短暫不完整的畫面會等穩定後才記錄。
 
 - **沒有 Shell Integration：**在 VS Code 設定啟用 `terminal.integrated.shellIntegration.enabled`，重新開啟受支援的終端。在 Windows 使用 PowerShell 7（`pwsh`）。
 - **找不到目前的 Codex 指令：**擴充套件無法接管在它啟動前就已執行的指令；請重新執行 `codex`。

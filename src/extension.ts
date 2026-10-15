@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import { AutoAcceptSession } from './autoAcceptSession';
 import { identifyCodexCommand } from './codexCommand';
+import { AuditDetails, AuditLog } from './auditLog';
 
 interface WatchedExecution {
+  id: number;
   execution: vscode.TerminalShellExecution;
   session: AutoAcceptSession;
 }
@@ -11,7 +13,8 @@ let cleanup: (() => void) | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   cleanup?.();
-  const output = vscode.window.createOutputChannel('Codex Auto-Accept');
+  const output = vscode.window.createOutputChannel('Codex Auto-Accept', { log: true });
+  const audit = new AuditLog(output);
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   const armedTerminals = new Set<vscode.Terminal>();
   const executions = new Map<vscode.Terminal, WatchedExecution>();
@@ -20,6 +23,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const notes = new WeakMap<vscode.Terminal, string>();
   const subscriptions: vscode.Disposable[] = [output, status];
   let disposed = false;
+  let nextSessionId = 1;
   const available = typeof vscode.window.onDidStartTerminalShellExecution === 'function';
 
   function updateStatus(): void {
@@ -47,18 +51,27 @@ export function activate(context: vscode.ExtensionContext): void {
   function setNote(terminal: vscode.Terminal, reason: string, log = armedTerminals.has(terminal)): void {
     if (notes.get(terminal) === reason) return;
     notes.set(terminal, reason);
-    if (log) output.appendLine('[' + terminal.name + '] ' + reason);
+    if (log) audit.write('diagnostic', terminal, { sessionId: executions.get(terminal)?.id, reason });
   }
 
-  function stopWatching(terminal: vscode.Terminal): void {
-    executions.get(terminal)?.session.dispose();
+  function stopWatching(terminal: vscode.Terminal, reason: string, exitCode?: number): void {
+    const record = executions.get(terminal);
+    if (!record) return;
+    record.session.dispose();
     executions.delete(terminal);
+    audit.write('session.stopped', terminal, { sessionId: record.id, reason, exitCode });
   }
 
-  function failWatching(terminal: vscode.Terminal, reason: string): void {
-    stopWatching(terminal);
-    armedTerminals.delete(terminal);
-    setNote(terminal, reason, true);
+  function disableTerminal(terminal: vscode.Terminal, reason?: string, sessionId = executions.get(terminal)?.id): void {
+    if (armedTerminals.delete(terminal)) audit.write('autoAccept.disabled', terminal, { sessionId, reason });
+  }
+
+  function failWatching(terminal: vscode.Terminal, reason: string, details: AuditDetails = {}): void {
+    const sessionId = executions.get(terminal)?.id ?? details.sessionId;
+    audit.write('watch.error', terminal, { ...details, sessionId, reason }, 'error');
+    stopWatching(terminal, reason);
+    disableTerminal(terminal, reason, sessionId);
+    setNote(terminal, reason, false);
     updateStatus();
     void vscode.window.showWarningMessage('Codex Auto-Accept：' + reason + '；已關閉此終端的自動核准。');
   }
@@ -66,17 +79,20 @@ export function activate(context: vscode.ExtensionContext): void {
   function toggle(): void {
     const terminal = vscode.window.activeTerminal;
     if (!terminal) {
+      audit.write('autoAccept.unavailable', undefined, { reason: '沒有目前使用中的終端。' }, 'warn');
       void vscode.window.showInformationMessage('Codex Auto-Accept：沒有目前使用中的終端。');
       return;
     }
     if (!available) {
+      audit.write('autoAccept.unavailable', terminal, { reason: '此 VS Code 不支援 Terminal Shell Integration API。' }, 'warn');
       void vscode.window.showWarningMessage('Codex Auto-Accept：此 VS Code 不支援 Terminal Shell Integration API。');
       return;
     }
     if (armedTerminals.has(terminal)) {
-      armedTerminals.delete(terminal);
+      disableTerminal(terminal);
     } else {
       armedTerminals.add(terminal);
+      audit.write('autoAccept.enabled', terminal, { sessionId: executions.get(terminal)?.id });
       if (!terminal.shellIntegration) {
         setNote(terminal, '等待 Shell Integration；在它啟用後重新執行 codex。');
         void vscode.window.showInformationMessage('Codex Auto-Accept：等待 Shell Integration，請在啟用後執行 codex。');
@@ -93,8 +109,11 @@ export function activate(context: vscode.ExtensionContext): void {
   function watch(terminal: vscode.Terminal, execution: vscode.TerminalShellExecution): void {
     if (disposed || lastExecutions.get(terminal) === execution) return;
     lastExecutions.set(terminal, execution);
-    if (executions.has(terminal)) setNote(terminal, 'Codex 監看已被另一個指令取代，已取消待送出的核准。', true);
-    stopWatching(terminal);
+    if (executions.has(terminal)) {
+      const reason = 'Codex 監看已被另一個指令取代，已取消待送出的核准。';
+      stopWatching(terminal, reason);
+      setNote(terminal, reason, false);
+    }
     const command = identifyCodexCommand(execution.commandLine.value);
     if (!command) {
       setNote(terminal, execution.commandLine.value
@@ -105,41 +124,41 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     // read() must be called synchronously in the start event, before any await.
+    const sessionId = nextSessionId++;
     let stream: AsyncIterable<string>;
     try {
       stream = execution.read();
     } catch (error) {
-      failWatching(terminal, '終端輸出讀取失敗，請重新執行 codex：' + String(error));
+      failWatching(terminal, '終端輸出讀取失敗，請重新執行 codex：' + String(error), { sessionId });
       return;
     }
     let record: WatchedExecution;
     const session = new AutoAcceptSession(
       () => {
-        if (disposed || executions.get(terminal) !== record || !armedTerminals.has(terminal)) return;
+        if (disposed || executions.get(terminal) !== record || !armedTerminals.has(terminal)) return false;
         terminal.sendText('y', false);
       },
       event => {
         if (disposed || executions.get(terminal) !== record) return;
         if (event.type === 'accepted') {
-          const labels = { command: '指令執行', edit: '檔案修改', network: '網路存取', input: '終端輸入', permissions: '本回合權限' };
-          output.appendLine('[' + terminal.name + '] 已送出單次核准：' + labels[event.kind]);
+          audit.write('approval.sent', terminal, { sessionId: record.id, kind: event.kind, content: event.content });
           setNote(terminal, '已送出單次核准，等待下一個操作。', false);
         } else {
           if (event.type === 'error') {
-            failWatching(terminal, event.reason);
+            failWatching(terminal, event.reason, { kind: event.kind, content: event.content });
             return;
           }
           // The session deduplicates per prompt, including later identical reasons.
           notes.set(terminal, event.reason);
-          output.appendLine('[' + terminal.name + '] ' + event.reason);
+          audit.write('approval.skipped', terminal, { sessionId: record.id, reason: event.reason }, 'warn');
         }
         updateStatus();
       },
     );
-    record = { execution, session };
+    record = { id: sessionId, execution, session };
     executions.set(terminal, record);
     setNote(terminal, '正在觀察 Codex ' + command.mode + ' 工作階段。', false);
-    output.appendLine('[' + terminal.name + '] Codex 互動指令開始（' + command.launcher + ' / ' + command.mode + '）');
+    audit.write('session.started', terminal, { sessionId, launcher: command.launcher, mode: command.mode });
     session.setArmed(armedTerminals.has(terminal));
     updateStatus();
 
@@ -150,8 +169,9 @@ export function activate(context: vscode.ExtensionContext): void {
           session.write(chunk);
         }
         if (!disposed && executions.get(terminal) === record) {
-          stopWatching(terminal);
-          setNote(terminal, 'Codex 終端輸出串流已結束，等待下一個工作階段；請重新執行 codex。', true);
+          const reason = 'Codex 終端輸出串流已結束，等待下一個工作階段；請重新執行 codex。';
+          stopWatching(terminal, reason);
+          setNote(terminal, reason, false);
           updateStatus();
         }
       } catch (error) {
@@ -167,8 +187,11 @@ export function activate(context: vscode.ExtensionContext): void {
   subscriptions.push(vscode.commands.registerCommand('codexAutoAccept.toggle', toggle));
   subscriptions.push(vscode.window.onDidChangeActiveTerminal(updateStatus));
   subscriptions.push(vscode.window.onDidCloseTerminal(terminal => {
-    stopWatching(terminal);
-    armedTerminals.delete(terminal);
+    const sessionId = executions.get(terminal)?.id;
+    const reason = '終端已關閉，已取消待送出的核准。';
+    stopWatching(terminal, reason);
+    disableTerminal(terminal, reason, sessionId);
+    audit.write('terminal.closed', terminal, { sessionId, reason });
     notes.delete(terminal);
     lastExecutions.delete(terminal);
     integratedTerminals.delete(terminal);
@@ -178,20 +201,22 @@ export function activate(context: vscode.ExtensionContext): void {
     subscriptions.push(vscode.window.onDidStartTerminalShellExecution(event => watch(event.terminal, event.execution)));
     subscriptions.push(vscode.window.onDidEndTerminalShellExecution(event => {
       if (executions.get(event.terminal)?.execution !== event.execution) return;
-      stopWatching(event.terminal);
-      setNote(event.terminal, event.exitCode === undefined
+      const reason = event.exitCode === undefined
         ? 'Codex 監看已中斷，已取消待送出的核准；請重新執行 codex。'
-        : 'Codex 指令已結束，等待下一個可監看的工作階段；請重新執行 codex。', true);
+        : 'Codex 指令已結束，等待下一個可監看的工作階段；請重新執行 codex。';
+      stopWatching(event.terminal, reason, event.exitCode);
+      setNote(event.terminal, reason, false);
       updateStatus();
     }));
   } else {
-    output.appendLine('此 VS Code 不支援 Terminal Shell Integration API。');
+    audit.write('diagnostic', undefined, { reason: '此 VS Code 不支援 Terminal Shell Integration API。' }, 'warn');
     void vscode.window.showWarningMessage('Codex Auto-Accept：請使用支援 Terminal Shell Integration API 的 VS Code。');
   }
   subscriptions.push(vscode.window.onDidChangeTerminalShellIntegration(event => {
     if (!integratedTerminals.has(event.terminal)) {
       integratedTerminals.add(event.terminal);
-      if (!executions.has(event.terminal)) setNote(event.terminal, 'Shell Integration 已啟用，等待 Codex 工作階段；請重新執行 codex。', true);
+      audit.write('shellIntegration.ready', event.terminal, { sessionId: executions.get(event.terminal)?.id });
+      if (!executions.has(event.terminal)) setNote(event.terminal, 'Shell Integration 已啟用，等待 Codex 工作階段；請重新執行 codex。', false);
     }
     updateStatus();
   }));
@@ -199,13 +224,14 @@ export function activate(context: vscode.ExtensionContext): void {
   cleanup = () => {
     if (disposed) return;
     disposed = true;
-    for (const record of executions.values()) record.session.dispose();
-    executions.clear();
-    armedTerminals.clear();
+    const reason = '擴充套件已停用，已取消待送出的核准。';
+    for (const terminal of executions.keys()) stopWatching(terminal, reason);
+    for (const terminal of armedTerminals) disableTerminal(terminal, reason);
+    audit.write('extension.stopped', undefined, { reason });
     for (const subscription of subscriptions) subscription.dispose();
   };
   context.subscriptions.push({ dispose: cleanup });
-  output.appendLine('Codex Auto-Accept 已啟動；各終端預設 OFF。');
+  audit.write('extension.started', undefined, { reason: 'Codex Auto-Accept 已啟動；各終端預設 OFF。' });
   updateStatus();
 }
 

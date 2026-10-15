@@ -1,5 +1,19 @@
 # 驗證紀錄
 
+## 2026-10-15：Audit Log
+
+版本：0.1.2。
+
+- Node.js 24.21.0、VS Code 1.141.2（Windows x64）、可攜式 PowerShell 7.6.7；使用 VS Code 1.93 API 型別編譯。
+- 114 項 Node 測試通過，包含原有 100 項及五種核准的格式化內容、歷史／選單邊界、JSON 單行跳脫、同名終端／工作階段識別、最新確認畫面、核准與診斷去重、失效 sender 及日誌寫入失敗隔離。
+- 23 項開發宿主整合檢查通過：原有 20 項 PowerShell 情境，加上原生日誌 JSON、Output 文字模型顯示，以及宿主退出後檔案仍可讀取。
+- 原生日誌確認保存 13 筆 `approval.sent`，涵蓋五種核准；每筆保留 VS Code 時間／等級前綴及可解析 JSON，操作內容已清除 ANSI，未支援提示使用警告等級。
+- 0.1.2 VSIX 套件內容、版本、既有命令、六個已編譯模組與本機建置一致、開發檔案排除及原始 MIT 授權檢查通過。
+- 完整結果在 `.cache/integration/results.txt`；原生日誌實際路徑在 `.cache/integration/audit-log-path.txt`。
+- 本次使用隔離測試 fixture，未重跑消耗額度的實際 Codex CLI 測試；下方保留先前的實際 CLI 驗證紀錄。受限程序無法讀取 VS Code 安裝目錄時，以一般 Windows 程序權限執行相同隔離測試，未變更安裝目錄 ACL 或日常設定。
+
+## 2026-10-14：初次驗證
+
 日期：2026-10-14。版本：0.1.1。
 
 - Node.js 24.21.0。
@@ -18,10 +32,10 @@
 
 ## 驗證結果位置
 
-- `.cache/integration/results.txt`：最後一輪的 20 項 PowerShell 整合結果；該輪未重複啟動實際 CLI。
+- `.cache/integration/results.txt`：目前為 2026-10-15 的 23 項開發宿主整合結果；未重複啟動實際 CLI。
 - `.cache/integration/live-results.txt`：包含實際 CLI 核准成功的測試結果。
 - `.cache/integration/live-codex-regression-trace.txt`：用於最後辨識器重播的實際 CLI 紀錄。
-- `codex-auto-accept-0.1.1.vsix`：已驗證的本機安裝套件。
+- `codex-auto-accept-0.1.2.vsix`：目前已驗證的本機安裝套件。
 
 ## 界線
 

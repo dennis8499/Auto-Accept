@@ -13,6 +13,14 @@ async function until(predicate: () => boolean, message: string, timeout = 15000)
 }
 function quote(value: string): string { return "'" + value.replace(/'/g, "''") + "'"; }
 
+function auditFiles(directory: string): string[] {
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const location = path.join(directory, entry.name);
+    return entry.isDirectory() ? auditFiles(location) : entry.name.endsWith('Codex Auto-Accept.log') ? [location] : [];
+  });
+}
+
 export async function run(): Promise<void> {
   const root = process.env.CODEX_AUTO_ACCEPT_ROOT!;
   const cache = path.join(root, '.cache', 'integration');
@@ -101,6 +109,38 @@ export async function run(): Promise<void> {
     await expect(a, 'command', 'other-program', 'NONE', true);
     await toggle(a);
     await expect(a, 'command', 'disarmed', 'NONE');
+
+    let auditFile: string | undefined;
+    await until(() => {
+      auditFile = auditFiles(process.env.CODEX_AUTO_ACCEPT_LOG_ROOT!).find(file =>
+        fs.readFileSync(file, 'utf8').split('"event":"approval.sent"').length - 1 === 13);
+      return !!auditFile;
+    }, 'native audit log did not persist all thirteen approval inputs');
+    const auditText = fs.readFileSync(auditFile!, 'utf8');
+    const records = auditText.trim().split(/\r?\n/).map(line => {
+      assert.match(line, /^\d{4}-\d{2}-\d{2} .* \[(?:info|warn|warning|error)\] \{/,
+        'VS Code must add native time and level prefixes to each JSON message');
+      return JSON.parse(line.slice(line.indexOf('{')));
+    });
+    const sent = records.filter(record => record.event === 'approval.sent');
+    assert.deepEqual([...new Set(sent.map(record => record.kind))].sort(), ['command', 'edit', 'input', 'network', 'permissions']);
+    assert.ok(sent.every(record => typeof record.content === 'string' && !record.content.includes('\x1b')));
+    assert.ok(records.some(record => record.event === 'approval.skipped'));
+    assert.equal(new Set(records.map(record => record.runId)).size, 1);
+    fs.writeFileSync(path.join(cache, 'audit-log-path.txt'), auditFile! + '\n');
+    reports.push('PASS native-audit-json');
+    console.log('PASS native-audit-json');
+
+    // Exercise the actual Output models through VS Code commands, without adding a public extension command.
+    const showAudit = (await vscode.commands.getCommands()).find(command =>
+      command.startsWith('workbench.action.output.show.') && command.includes('local-codex.codex-auto-accept'));
+    assert.ok(showAudit, 'VS Code must register the native audit channel show command');
+    await vscode.commands.executeCommand(showAudit);
+    await until(() => vscode.workspace.textDocuments.some(document =>
+      document.getText().includes('"runId":"' + sent[0].runId + '"') && document.getText().includes('"event":"approval.sent"')),
+      'native Output channel must display the persisted JSON audit messages');
+    reports.push('PASS native-output-model');
+    console.log('PASS native-output-model');
 
     if (process.env.CODEX_AUTO_ACCEPT_LIVE_CLI) {
       await toggle(a);

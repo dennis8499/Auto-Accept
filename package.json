@@ -2,7 +2,7 @@
   "name": "codex-auto-accept",
   "displayName": "Codex Auto-Accept",
   "description": "自動接受 VS Code 終端中 Codex CLI 的單次操作核准，保留一般提問手動回答。",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "local-codex",
   "license": "MIT",
   "repository": {
@@ -33,7 +33,7 @@
     "watch": "tsc -watch -p ./",
     "test": "npm run compile && node --test test/*.test.cjs",
     "test:integration": "npm run compile && node scripts/run-integration.cjs",
-    "package": "vsce package --no-dependencies --allow-missing-repository --out codex-auto-accept-0.1.1.vsix",
+    "package": "vsce package --no-dependencies --allow-missing-repository --out codex-auto-accept-0.1.2.vsix",
     "verify:package": "node scripts/verify-package.cjs"
   },
   "devDependencies": {

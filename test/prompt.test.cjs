@@ -9,6 +9,38 @@ for (const kind of ['command', 'edit', 'network', 'input', 'permissions']) {
     assert.equal(detect(frame(approval(kind))).prompt?.kind, kind);
   });
 }
+
+for (const [kind, action, detail, expected] of [
+  ['command', 'node -e "console.log(\'quoted\')"', '    Write-Output "first"\r\n      Write-Output "second"',
+    '  $ node -e "console.log(\'quoted\')"\n    Write-Output "first"\n      Write-Output "second"'],
+  ['edit', '', '  @@ -1,2 +1,2 @@\r\n  -before\r\n  +  after',
+    '  Destination: README.md\n  @@ -1,2 +1,2 @@\n  -before\n  +  after'],
+  ['network', 'curl "https://example.com/path"', '    Port: 443',
+    '  $ curl "https://example.com/path"\n    Port: 443'],
+  ['input', 'printf "line1\\nline2"', '    exit "quoted"',
+    '  $ printf "line1\\nline2"\n    exit "quoted"'],
+  ['permissions', '', '    C:\\project\\file.txt',
+    '  Permission rule: read README.md\n    C:\\project\\file.txt'],
+]) {
+  test('retains formatted ' + kind + ' content without historical text or menu controls', () => {
+    const result = detect(frame('Historical output that must stay out\r\n' + approval(kind, action, detail)));
+    assert.equal(result.prompt?.kind, kind);
+    assert.ok(result.prompt.content.includes(expected));
+    assert.ok(result.prompt.content.includes('\n\n  Reason: requested operation\n\n'));
+    assert.ok(!result.prompt.content.includes('Historical output'));
+    assert.ok(!result.prompt.content.includes('Yes,'));
+    assert.ok(!result.prompt.content.includes('Press enter'));
+  });
+}
+
+test('content boundaries retain numbered operation steps and wrapped native titles', () => {
+  const text = approval('permissions', '', '  1. Read an operation file\r\n  2. Inspect its contents')
+    .replace('grant these permissions?', 'grant these\r\n  permissions?');
+  const result = detect(frame(approval('command', 'echo historical') + '\r\n' + text));
+  assert.match(result.prompt.content, /^  Would you like to grant these\n  permissions\?/);
+  assert.ok(result.prompt.content.endsWith('  1. Read an operation file\n  2. Inspect its contents'));
+  assert.ok(!result.prompt.content.includes('echo historical'));
+});
 test('accepts a single-use shortcut independently of the highlighted row', () => {
   const text = approval().replace('› 1.', '  1.').replace('  3.', '› 3.');
   assert.equal(detect(frame(text)).prompt?.kind, 'command');
@@ -87,7 +119,11 @@ test('supports Codex approvals from a labeled thread', () => {
 test('ANSI styles and OSC links do not pollute detection', () => {
   const text = approval().replace('echo hello', ESC + ']8;;https://example.com' + ESC + '\\' + 'echo hello' + ESC + ']8;;' + '\x07')
     .replace('› 1.', ESC + '[1;7m› 1.' + ESC + '[0m');
-  assert.equal(detect(frame(text)).prompt?.kind, 'command');
+  const prompt = detect(frame(text)).prompt;
+  assert.equal(prompt?.kind, 'command');
+  assert.ok(prompt.content.includes('$ echo hello'));
+  assert.ok(!prompt.content.includes(ESC));
+  assert.ok(!prompt.content.includes('https://example.com'));
 });
 test('detects only after split CSI and synchronized updates finish', () => {
   const screen = new TerminalScreen();

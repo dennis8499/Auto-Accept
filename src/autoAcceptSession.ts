@@ -6,8 +6,9 @@ export interface Scheduler {
   clear(handle: unknown): void;
 }
 export type SessionEvent =
-  | { type: 'accepted'; kind: ApprovalPrompt['kind'] }
-  | { type: 'unsupported' | 'error'; reason: string };
+  | { type: 'accepted'; kind: ApprovalPrompt['kind']; content: string }
+  | { type: 'unsupported'; reason: string }
+  | { type: 'error'; reason: string; kind?: ApprovalPrompt['kind']; content?: string };
 const defaultScheduler: Scheduler = {
   set: (callback, delay) => setTimeout(callback, delay),
   clear: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -28,7 +29,7 @@ export class AutoAcceptSession {
   private lastFrame = 0;
 
   constructor(
-    private readonly send: () => void,
+    private readonly send: () => void | boolean,
     private readonly report: (event: SessionEvent) => void = () => {},
     private readonly scheduler: Scheduler = defaultScheduler,
   ) {}
@@ -133,20 +134,21 @@ export class AutoAcceptSession {
     // Latch before sending; synchronous repaint or send failure must never retry.
     this.handled = expected.fingerprint;
     try {
-      this.send();
-      this.report({ type: 'accepted', kind: expected.kind });
+      if (this.send() === false) return;
     } catch (error) {
-      this.fail(`送出核准失敗：${String(error)}`);
+      this.fail(`送出核准失敗：${String(error)}`, current);
+      return;
     }
+    this.report({ type: 'accepted', kind: current.kind, content: current.content });
   }
 
-  private fail(reason: string): void {
+  private fail(reason: string, prompt?: ApprovalPrompt): void {
     this.failure = reason;
     this.armed = false;
     this.cancelPending();
     this.cancelDiagnostic();
     this.cancelAbsence();
-    this.report({ type: 'error', reason });
+    this.report({ type: 'error', reason, kind: prompt?.kind, content: prompt?.content });
   }
 
   private cancelPending(): void {

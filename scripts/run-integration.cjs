@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const cp = require('node:child_process');
+const assert = require('node:assert/strict');
 const { Writable } = require('node:stream');
 const { runTests } = require('@vscode/test-electron');
 const { approval, frame, FOOTER } = require('../test/helpers.cjs');
@@ -63,6 +64,7 @@ runTests({
   extensionTestsEnv: {
     ELECTRON_RUN_AS_NODE: undefined,
     CODEX_AUTO_ACCEPT_ROOT: root,
+    CODEX_AUTO_ACCEPT_LOG_ROOT: path.join(profile, 'user-data', 'logs'),
     CODEX_AUTO_ACCEPT_LIVE_CLI: process.env.CODEX_AUTO_ACCEPT_LIVE_CLI,
     CODEX_AUTO_ACCEPT_PWSH: process.env.CODEX_AUTO_ACCEPT_PWSH ||
       path.join(root, '.cache', 'pwsh', 'portable', 'pwsh.exe'),
@@ -74,6 +76,12 @@ runTests({
     '--user-data-dir=' + path.join(profile, 'user-data'),
     '--extensions-dir=' + path.join(profile, 'extensions'),
   ],
+}).then(() => {
+  const auditFile = fs.readFileSync(path.join(cache, 'audit-log-path.txt'), 'utf8').trim();
+  assert.ok(fs.readFileSync(auditFile, 'utf8').includes('"event":"approval.sent"'),
+    'native audit file must remain readable after the development host exits');
+  fs.appendFileSync(path.join(cache, 'results.txt'), 'PASS native-log-retained-after-exit\n');
+  console.log('PASS native-log-retained-after-exit');
 }).catch(error => {
   console.error(error);
   process.exitCode = 1;

@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { ESC, approval, frame, session } = require('./helpers.cjs');
+const { AutoAcceptSession } = require('../out/autoAcceptSession');
+const { ESC, approval, frame, session, Clock } = require('./helpers.cjs');
 
 test('OFF never sends; arming later accepts an already waiting card', () => {
   const { value, clock, sends } = session();
@@ -156,6 +157,36 @@ test('a failed send blocks retries', () => {
   assert.equal(sends.length, 0);
   assert.ok(value.blockedReason);
   assert.equal(events.filter(event => event.type === 'error').length, 1);
+  assert.equal(events.filter(event => event.type === 'accepted').length, 0);
+  assert.equal(events[0].kind, 'command');
+  assert.ok(events[0].content.includes('$ echo hello'));
+});
+
+test('accepted content comes from the confirmed snapshot even if formatting changes while pending', () => {
+  const { value, clock, sends, events } = session();
+  value.setArmed(true);
+  value.write(frame(approval('command', 'echo hello')));
+  clock.advance(60);
+  value.write(frame(approval('command', 'echo  hello')));
+  clock.advance(60);
+  assert.equal(sends.length, 1);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'accepted');
+  assert.ok(events[0].content.includes('$ echo  hello'));
+});
+
+test('a stale sender that declines input cannot produce an accepted event', () => {
+  const clock = new Clock();
+  const events = [];
+  let attempts = 0;
+  const value = new AutoAcceptSession(() => { attempts++; return false; }, event => events.push(event), clock.scheduler);
+  value.setArmed(true);
+  value.write(frame(approval()));
+  clock.advance(120);
+  value.write(frame(approval()));
+  clock.advance(1000);
+  assert.equal(attempts, 1);
+  assert.equal(events.length, 0);
 });
 test('independent terminals retain independent arming state', () => {
   const a = session();
