@@ -11,7 +11,7 @@ export interface ApprovalDetection {
 
 const FOOTER = 'Press enter to confirm or esc to cancel';
 const HEADERS: Array<{ kind: ApprovalKind; pattern: RegExp; label: string }> = [
-  { kind: 'command', pattern: /Would you like to run the following command\?/, label: 'Yes, proceed (y)' },
+  { kind: 'command', pattern: /Would you like to run the following command\s*\?/, label: 'Yes, proceed (y)' },
   { kind: 'edit', pattern: /Would you like to make the following edits\?/, label: 'Yes, proceed (y)' },
   { kind: 'network', pattern: /Do you want to approve network access to "[^"\n]+"\?/, label: 'Yes, just this once (y)' },
   { kind: 'input', pattern: /Would you like to send input to (?:the existing terminal|terminal [\w-]+)\?/, label: 'Yes, proceed (y)' },
@@ -55,7 +55,10 @@ export function detectApproval(snapshot: ScreenSnapshot): ApprovalDetection {
   if (!lineStarts.has(footer) || (suffix && !/^or \S+ to open thread$/.test(suffix))) return { state: 'other' };
   if (!selected) return { state: 'other', reason: '不是已支援的 Codex 操作核准' };
   const block = text.slice(selected.start, footer).trim();
-  const fingerprint = `${selected.kind}:${block.replace(/[›❯]\s*(?=\d+\.)/g, '')}`;
+  // Normalize only the validated command title; preserve operation text and screen offsets.
+  const fingerprintBlock = selected.kind === 'command'
+    ? block.replace(/^(Would you like to run the following command)\s*\?/, '$1?') : block;
+  const fingerprint = `${selected.kind}:${fingerprintBlock.replace(/[›❯]\s*(?=\d+\.)/g, '')}`;
   // Description text is opaque: only line-start menu rows define UI controls.
   const starts = [...block.matchAll(/(?:[›❯]\s*)?\b(\d+)\.\s+/g)]
     .filter(option => lineStarts.has(selected!.start + option.index!));

@@ -10,6 +10,79 @@ for (const kind of ['command', 'edit', 'network', 'input', 'permissions']) {
   });
 }
 
+test('recognizes the reported local Set-Content approval and retains its content', () => {
+  const text = approval('command', 'Set-Content -LiteralPath "...."')
+    .replace('command?', 'command ?')
+    .replace('  Reason: requested operation',
+      '  Environment: local\r\n  Reason: Do you want to allow writing the second fixed read batch into the owned review context?');
+  const result = detect(frame(text));
+  assert.equal(result.state, 'approval');
+  assert.equal(result.prompt?.kind, 'command');
+  assert.equal(result.prompt.content, [
+    '  Would you like to run the following command ?', '',
+    '  Environment: local',
+    '  Reason: Do you want to allow writing the second fixed read batch into the owned review context?', '',
+    '  $ Set-Content -LiteralPath "...."',
+  ].join('\n'));
+});
+
+for (const [name, whitespace, displayedWhitespace] of [
+  ['none', '', ''],
+  ['one space', ' ', ' '],
+  ['multiple spaces', '    ', '    '],
+  ['tab', '\t', '   '],
+  ['line break', '\r\n  ', '\n  '],
+]) {
+  test('command title punctuation accepts ' + name + ' and retains displayed formatting with one fingerprint', () => {
+    const baseline = detect(frame(approval())).prompt;
+    const text = approval().replace('command?', 'command' + whitespace + '?');
+    const result = detect(frame(text));
+    assert.equal(result.state, 'approval');
+    assert.equal(result.prompt?.kind, 'command');
+    assert.equal(result.prompt.fingerprint, baseline.fingerprint);
+    assert.equal(result.prompt.content, baseline.content.replace('command?', 'command' + displayedWhitespace + '?'));
+  });
+}
+
+test('spaced command titles still require complete native controls and standalone boundaries', () => {
+  const text = approval().replace('command?', 'command ?');
+  for (const [name, incomplete] of [
+    ['title only', 'Would you like to run the following command ?'],
+    ['missing footer', text.replace(FOOTER, '')],
+    ['truncated first option', text.replace('Yes, proceed (y)', 'Yes, proceed')],
+    ['missing refusal', text.replace('No, and tell Codex what to do differently (esc)', 'Maybe')],
+    ['missing selection', text.replace('›', ' ')],
+    ['wrong shortcut', text.replace('Yes, proceed (y)', 'Yes, proceed (q)')],
+  ]) {
+    const result = detect(frame(incomplete));
+    assert.equal(result.state, 'partial', name);
+    assert.equal(result.prompt, undefined, name);
+  }
+  for (const embedded of [
+    text.replace('Would you like to run', 'Explanation: Would you like to run'),
+    text.replace('command ?', 'command ? This is an example.'),
+  ]) assert.equal(detect(frame(embedded)).state, 'other');
+});
+
+test('command title normalization preserves question-mark spacing in commands and reasons', () => {
+  const phrase = 'Would you like to run the following command';
+  for (const [name, first, second] of [
+    ['command', approval('command', 'Write-Output "' + phrase + '?"'),
+      approval('command', 'Write-Output "' + phrase + ' ?"')],
+    ['reason', approval().replace('requested operation', 'Inspect text: ' + phrase + '?'),
+      approval().replace('requested operation', 'Inspect text: ' + phrase + ' ?')],
+  ]) {
+    const firstPrompt = detect(frame(first.replace('command?', 'command ?'))).prompt;
+    const secondPrompt = detect(frame(second.replace('command?', 'command ?'))).prompt;
+    assert.equal(firstPrompt?.kind, 'command', name);
+    assert.equal(secondPrompt?.kind, 'command', name);
+    assert.notEqual(firstPrompt.fingerprint, secondPrompt.fingerprint, name);
+    const prefix = name === 'command' ? '  $ Write-Output "' : '  Reason: Inspect text: ';
+    assert.ok(firstPrompt.content.includes(prefix + phrase + '?'), name);
+    assert.ok(secondPrompt.content.includes(prefix + phrase + ' ?'), name);
+  }
+});
+
 for (const [kind, action, detail, expected] of [
   ['command', 'node -e "console.log(\'quoted\')"', '    Write-Output "first"\r\n      Write-Output "second"',
     '  $ node -e "console.log(\'quoted\')"\n    Write-Output "first"\n      Write-Output "second"'],

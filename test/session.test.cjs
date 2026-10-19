@@ -25,6 +25,41 @@ test('repeated repaints never send a second y even after the old debounce period
   }
   assert.equal(sends.length, 1);
 });
+
+test('command title spacing changes preserve pending confirmation, deduplication and later approvals', () => {
+  const variants = ['command?', 'command ?', 'command   ?', 'command\r\n  ?'];
+  for (const initial of variants) {
+    const { value, clock, sends, events } = session();
+    const card = title => frame(approval().replace('command?', title));
+    value.setArmed(true);
+    value.write(card(initial));
+    clock.advance(60);
+    value.write(card('command\r\n  ?'));
+    clock.advance(59);
+    assert.equal(sends.length, 0);
+    clock.advance(1);
+    assert.deepEqual(sends, [{ at: 120 }]);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, 'accepted');
+    assert.ok(events[0].content.startsWith('  Would you like to run the following command\n  ?'));
+
+    for (const title of variants) {
+      value.write(card(title));
+      clock.advance(200);
+    }
+    assert.equal(sends.length, 1);
+    assert.equal(events.length, 1);
+
+    value.write(frame('Working...'));
+    clock.advance(180);
+    value.write(card('command ?'));
+    clock.advance(120);
+    assert.equal(sends.length, 2);
+    assert.equal(events.length, 2);
+    assert.ok(events[1].content.startsWith('  Would you like to run the following command ?'));
+  }
+});
+
 test('blank and partial redraws do not reset the approval latch', () => {
   const { value, clock, sends } = session();
   value.setArmed(true);

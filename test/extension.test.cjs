@@ -324,6 +324,33 @@ test('native audit messages are single-line JSON with current operation content 
   assert.ok(h.logs.every(log => log.level === 'info'));
 });
 
+test('spaced command titles send one y and retain the original review write content in audit JSON', async t => {
+  const h = host(t);
+  h.toggle();
+  const running = execution();
+  h.start(running);
+  const reason = 'Do you want to allow writing the second fixed read batch into the owned review context?';
+  const card = approval('command', 'Set-Content -LiteralPath "...."')
+    .replace('  Reason: requested operation', '  Environment: local\r\n  Reason: ' + reason);
+  running.write(frame(card));
+  await settle();
+  h.clock.advance(60);
+  running.write(frame(card.replace('command?', 'command ?')));
+  await settle();
+  h.clock.advance(60);
+
+  assert.deepEqual(h.a.sends, [['y', false]]);
+  const [record] = h.records('approval.sent');
+  assert.equal(h.records('approval.sent').length, 1);
+  assert.equal(record.kind, 'command');
+  assert.equal(record.content, [
+    '  Would you like to run the following command ?', '',
+    '  Environment: local', '  Reason: ' + reason, '',
+    '  $ Set-Content -LiteralPath "...."',
+  ].join('\n'));
+  assert.equal(h.records('approval.skipped').length, 0);
+});
+
 test('same-name terminals and consecutive executions have distinct audit identities', t => {
   const h = host(t);
   const first = execution();

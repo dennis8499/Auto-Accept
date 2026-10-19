@@ -41,6 +41,8 @@ code --install-extension .\codex-auto-accept-0.1.2.vsix
 | 終端輸入 | Would you like to send input to terminal …? | 單次 |
 | 額外權限 | Would you like to grant these permissions? | 本回合 |
 
+指令執行標題也支援 `Would you like to run the following command ?`，問號前可有空白或換行。同一核准的標題空白或換行改變時，不會重複送出輸入；Audit Log 保留當下可見的原始標題、Environment、理由與指令格式。
+
 只有完整核准畫面明確顯示單次同意 `(y)`、拒絕選項及確認提示時才會動作。使用 `y` 快捷鍵，所以即使游標移到其他選項，也不會選取「之後不再詢問」。重繪同一個核准不會再次送出輸入。
 
 指令、程式與 Git 操作使用相同的核准辨識。理由或指令內的 `needs your approval`、表單文字與反引號屬於操作內容，不會被當成一般提問。每個完成的重繪畫面都會處理，因此終端合併輸出時，已結束核准後的下一次相同操作也能接受。
