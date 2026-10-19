@@ -6,10 +6,10 @@
 
 需要 VS Code 1.93 以上，以及已安裝並登入的 Codex CLI。終端必須啟用 [Shell Integration](https://code.visualstudio.com/docs/terminal/shell-integration)。Windows 請使用 **PowerShell 7（pwsh）** 或 Git Bash；Windows PowerShell 5 不支援自動注入 Shell Integration。
 
-使用本機建置的 `codex-auto-accept-0.1.2.vsix`，或從 [GitHub Releases](https://github.com/dennis8499/Auto-Accept/releases/latest) 下載已發布的版本，再於 VS Code 的擴充套件頁面選擇「… → Install from VSIX…」開啟它。也可以在這個專案目錄執行：
+使用本機建置的 `codex-auto-accept-0.1.3.vsix`，或從 [GitHub Releases](https://github.com/dennis8499/Auto-Accept/releases/latest) 下載已發布的版本，再於 VS Code 的擴充套件頁面選擇「… → Install from VSIX…」開啟它。也可以在這個專案目錄執行：
 
 ```powershell
-code --install-extension .\codex-auto-accept-0.1.2.vsix
+code --install-extension .\codex-auto-accept-0.1.3.vsix
 ```
 
 安裝後重新開啟終端並執行 `codex`。
