@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as path from 'node:path';
+import { homedir } from 'node:os';
 import { AutoAcceptSession } from './autoAcceptSession';
 import { identifyCodexCommand } from './codexCommand';
 import { AuditDetails, AuditLog } from './auditLog';
@@ -8,6 +10,14 @@ interface WatchedExecution {
   execution: vscode.TerminalShellExecution;
   session: AutoAcceptSession;
 }
+
+interface CmdLaunch {
+  started: boolean;
+  failureReported?: boolean;
+  startupTimer?: ReturnType<typeof setTimeout>;
+}
+
+const CMD_STARTUP_TIMEOUT_MS = 15000;
 
 let cleanup: (() => void) | undefined;
 
@@ -21,6 +31,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const lastExecutions = new WeakMap<vscode.Terminal, vscode.TerminalShellExecution>();
   const integratedTerminals = new WeakSet<vscode.Terminal>();
   const notes = new WeakMap<vscode.Terminal, string>();
+  const cmdTerminals = new Map<vscode.Terminal, CmdLaunch>();
   const subscriptions: vscode.Disposable[] = [output, status];
   let disposed = false;
   let nextSessionId = 1;
@@ -41,9 +52,12 @@ export function activate(context: vscode.ExtensionContext): void {
     const state = notes.get(terminal) ?? (terminal.shellIntegration
       ? '等待可辨識的 Codex 互動指令。'
       : '尚未啟用 Shell Integration，無法讀取提示。');
+    const waiting = cmdTerminals.has(terminal)
+      ? '等待 CMD 啟動器接上 Codex 輸出；若啟動失敗，請重新執行「以 CMD 啟動 Codex」。點擊關閉。'
+      : '尚未接上 Codex 輸出；請結束目前工作階段，在 Shell Integration 啟用後重新執行 codex。點擊關閉。';
     status.tooltip = '終端：' + terminal.name + '\n' + state + '\n' +
       (armed ? watching ? '正在監看，僅送出單次核准；點擊關閉。'
-        : '尚未接上 Codex 輸出；請結束目前工作階段，在 Shell Integration 啟用後重新執行 codex。點擊關閉。'
+        : waiting
         : '點擊開啟這個終端的單次操作核准。');
     status.backgroundColor = armed ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
   }
@@ -66,7 +80,18 @@ export function activate(context: vscode.ExtensionContext): void {
     if (armedTerminals.delete(terminal)) audit.write('autoAccept.disabled', terminal, { sessionId, reason });
   }
 
+  function clearCmdStartup(terminal: vscode.Terminal): void {
+    const launch = cmdTerminals.get(terminal);
+    if (launch?.startupTimer !== undefined) {
+      clearTimeout(launch.startupTimer);
+      launch.startupTimer = undefined;
+    }
+  }
+
   function failWatching(terminal: vscode.Terminal, reason: string, details: AuditDetails = {}): void {
+    clearCmdStartup(terminal);
+    const launch = cmdTerminals.get(terminal);
+    if (launch) launch.failureReported = true;
     const sessionId = executions.get(terminal)?.id ?? details.sessionId;
     audit.write('watch.error', terminal, { ...details, sessionId, reason }, 'error');
     stopWatching(terminal, reason);
@@ -74,6 +99,54 @@ export function activate(context: vscode.ExtensionContext): void {
     setNote(terminal, reason, false);
     updateStatus();
     void vscode.window.showWarningMessage('Codex Auto-Accept：' + reason + '；已關閉此終端的自動核准。');
+  }
+
+  function startCmd(): void {
+    if (disposed) return;
+    if (process.platform !== 'win32') {
+      void vscode.window.showInformationMessage('Codex Auto-Accept：以 CMD 啟動 Codex 需要 Windows 擴充套件主機。');
+      return;
+    }
+    if (!available) {
+      void vscode.window.showWarningMessage('Codex Auto-Accept：此 VS Code 不支援 Terminal Shell Integration API。');
+      return;
+    }
+    let createdTerminal: vscode.Terminal | undefined;
+    try {
+      const editor = vscode.window.activeTextEditor;
+      const folder = (editor && vscode.workspace.getWorkspaceFolder(editor.document.uri))
+        ?? vscode.workspace.workspaceFolders?.[0];
+      const terminal = vscode.window.createTerminal({
+        name: 'Codex (CMD)',
+        shellPath: path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe'),
+        shellArgs: '/d /s /v:off /c ""%CODEX_AUTO_ACCEPT_CMD_LAUNCHER%""',
+        env: { CODEX_AUTO_ACCEPT_CMD_LAUNCHER: context.asAbsolutePath('resources/cmd-launcher.cmd') },
+        cwd: folder?.uri ?? homedir(),
+        isTransient: true,
+      });
+      createdTerminal = terminal;
+      const launch: CmdLaunch = { started: false };
+      cmdTerminals.set(terminal, launch);
+      launch.startupTimer = setTimeout(() => {
+        launch.startupTimer = undefined;
+        if (!disposed && cmdTerminals.get(terminal) === launch && !launch.started) {
+          failWatching(terminal, 'CMD 啟動器未能接上 Codex 輸出，請重新執行「以 CMD 啟動 Codex」。');
+        }
+      }, CMD_STARTUP_TIMEOUT_MS);
+      setNote(terminal, '正在以 CMD 啟動 Codex，自動核准預設 OFF。', false);
+      audit.write('diagnostic', terminal, { reason: '已建立專用 CMD 終端，自動核准預設 OFF。' });
+      terminal.show();
+    } catch (error) {
+      const reason = 'CMD 終端啟動失敗：' + String(error);
+      if (createdTerminal) {
+        clearCmdStartup(createdTerminal);
+        cmdTerminals.delete(createdTerminal);
+        notes.delete(createdTerminal);
+        try { createdTerminal.dispose(); } catch { /* Keep the original startup error. */ }
+      }
+      audit.write('watch.error', createdTerminal, { reason }, 'error');
+      void vscode.window.showWarningMessage('Codex Auto-Accept：' + reason);
+    }
   }
 
   function toggle(): void {
@@ -93,7 +166,9 @@ export function activate(context: vscode.ExtensionContext): void {
     } else {
       armedTerminals.add(terminal);
       audit.write('autoAccept.enabled', terminal, { sessionId: executions.get(terminal)?.id });
-      if (!terminal.shellIntegration) {
+      if (cmdTerminals.has(terminal) && !executions.has(terminal)) {
+        setNote(terminal, '等待 CMD 啟動器接上 Codex 輸出。');
+      } else if (!terminal.shellIntegration) {
         setNote(terminal, '等待 Shell Integration；在它啟用後重新執行 codex。');
         void vscode.window.showInformationMessage('Codex Auto-Accept：等待 Shell Integration，請在啟用後執行 codex。');
       } else if (!executions.has(terminal)) {
@@ -121,6 +196,12 @@ export function activate(context: vscode.ExtensionContext): void {
         : 'Shell Integration 尚未提供指令名稱；等待下一個 Codex 工作階段，請重新執行 codex。');
       updateStatus();
       return;
+    }
+
+    const cmdLaunch = cmdTerminals.get(terminal);
+    if (cmdLaunch) {
+      cmdLaunch.started = true;
+      clearCmdStartup(terminal);
     }
 
     // read() must be called synchronously in the start event, before any await.
@@ -185,16 +266,29 @@ export function activate(context: vscode.ExtensionContext): void {
   status.command = 'codexAutoAccept.toggle';
   status.show();
   subscriptions.push(vscode.commands.registerCommand('codexAutoAccept.toggle', toggle));
+  subscriptions.push(vscode.commands.registerCommand('codexAutoAccept.startCmd', startCmd));
   subscriptions.push(vscode.window.onDidChangeActiveTerminal(updateStatus));
   subscriptions.push(vscode.window.onDidCloseTerminal(terminal => {
+    const launch = cmdTerminals.get(terminal);
+    clearCmdStartup(terminal);
+    const exitCode = terminal.exitStatus?.code;
+    const exitReason = terminal.exitStatus?.reason;
+    if (launch && !launch.started && !launch.failureReported &&
+      (exitReason === vscode.TerminalExitReason.Process || exitReason === vscode.TerminalExitReason.Unknown)) {
+      const reason = exitCode === 9009
+        ? '找不到可執行的 Codex，請確認 codex.exe 或 codex.cmd 已加入 CMD 的 PATH。'
+        : 'CMD 啟動器在接上 Codex 輸出前已結束' + (exitCode === undefined ? '。' : '（結束碼 ' + exitCode + '）。');
+      failWatching(terminal, reason, { exitCode });
+    }
     const sessionId = executions.get(terminal)?.id;
     const reason = '終端已關閉，已取消待送出的核准。';
-    stopWatching(terminal, reason);
+    stopWatching(terminal, reason, exitCode);
     disableTerminal(terminal, reason, sessionId);
-    audit.write('terminal.closed', terminal, { sessionId, reason });
+    audit.write('terminal.closed', terminal, { sessionId, reason, exitCode });
     notes.delete(terminal);
     lastExecutions.delete(terminal);
     integratedTerminals.delete(terminal);
+    cmdTerminals.delete(terminal);
     updateStatus();
   }));
   if (available) {
@@ -216,7 +310,9 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!integratedTerminals.has(event.terminal)) {
       integratedTerminals.add(event.terminal);
       audit.write('shellIntegration.ready', event.terminal, { sessionId: executions.get(event.terminal)?.id });
-      if (!executions.has(event.terminal)) setNote(event.terminal, 'Shell Integration 已啟用，等待 Codex 工作階段；請重新執行 codex。', false);
+      if (!executions.has(event.terminal)) setNote(event.terminal, cmdTerminals.has(event.terminal)
+        ? 'CMD 啟動器已接上，等待 Codex 工作階段。'
+        : 'Shell Integration 已啟用，等待 Codex 工作階段；請重新執行 codex。', false);
     }
     updateStatus();
   }));
@@ -227,6 +323,8 @@ export function activate(context: vscode.ExtensionContext): void {
     const reason = '擴充套件已停用，已取消待送出的核准。';
     for (const terminal of executions.keys()) stopWatching(terminal, reason);
     for (const terminal of armedTerminals) disableTerminal(terminal, reason);
+    for (const terminal of cmdTerminals.keys()) clearCmdStartup(terminal);
+    cmdTerminals.clear();
     audit.write('extension.stopped', undefined, { reason });
     for (const subscription of subscriptions) subscription.dispose();
   };

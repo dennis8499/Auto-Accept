@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { inflateRawSync } = require('node:zlib');
 
 const root = path.resolve(__dirname, '..');
-const bytes = fs.readFileSync(path.join(root, 'codex-auto-accept-0.1.3.vsix'));
+const bytes = fs.readFileSync(path.join(root, 'codex-auto-accept-0.1.4.vsix'));
 let end = bytes.length - 22;
 while (end >= Math.max(0, bytes.length - 65557) && bytes.readUInt32LE(end) !== 0x06054b50) end--;
 assert.ok(end >= 0, 'ZIP central directory must exist');
@@ -32,10 +32,20 @@ for (let index = 0; index < count; index++) {
 }
 const manifest = JSON.parse(files.get('extension/package.json').toString('utf8'));
 assert.equal(manifest.name, 'codex-auto-accept');
-assert.equal(manifest.version, '0.1.3');
+assert.equal(manifest.version, '0.1.4');
 assert.equal(manifest.publisher, 'local-codex');
 assert.equal(manifest.displayName, 'Codex Auto-Accept');
-assert.deepEqual(manifest.contributes.commands.map(command => command.command), ['codexAutoAccept.toggle']);
+assert.deepEqual(manifest.contributes.commands, [
+  {
+    command: 'codexAutoAccept.toggle',
+    title: 'Codex Auto-Accept: 切換目前終端的自動核准'
+  },
+  {
+    command: 'codexAutoAccept.startCmd',
+    title: 'Codex Auto-Accept: 以 CMD 啟動 Codex',
+    enablement: 'isWindows'
+  }
+]);
 for (const name of ['extension', 'codexCommand', 'terminalScreen', 'approvalPrompt', 'autoAcceptSession', 'auditLog']) {
   assert.ok(files.has('extension/out/' + name + '.js'), 'compiled ' + name);
   assert.ok(files.get('extension/out/' + name + '.js').equals(fs.readFileSync(path.join(root, 'out', name + '.js'))),
@@ -43,6 +53,10 @@ for (const name of ['extension', 'codexCommand', 'terminalScreen', 'approvalProm
 }
 assert.ok(files.get('extension/readme.md').toString('utf8').includes('PowerShell 7'));
 assert.ok(files.get('extension/readme.md').toString('utf8').includes('等待 Codex'));
+assert.ok(files.get('extension/readme.md').toString('utf8').includes('codexAutoAccept.startCmd'));
+assert.ok(files.has('extension/resources/cmd-launcher.cmd'), 'CMD launcher resource');
+assert.ok(files.get('extension/resources/cmd-launcher.cmd').equals(
+  fs.readFileSync(path.join(root, 'resources', 'cmd-launcher.cmd'))), 'packaged CMD launcher matches local resource');
 assert.ok(files.has('extension/UPSTREAM.md'));
 assert.equal(files.get('extension/LICENSE.txt').toString('utf8').replace(/\r\n/g, '\n'),
   fs.readFileSync(path.join(root, 'LICENSE'), 'utf8').replace(/\r\n/g, '\n'));

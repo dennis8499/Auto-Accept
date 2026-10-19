@@ -56,13 +56,15 @@ function terminal(name, integrated = true) {
   };
 }
 
-function host(t) {
+function host(t, options = {}) {
   const clock = new Clock();
   const lines = [];
   const logs = [];
   const channels = [];
   let throwLogs = false;
   const warnings = [];
+  const information = [];
+  const created = [];
   const commands = new Map();
   const events = Object.fromEntries(['active', 'close', 'start', 'end', 'integration'].map(name => [name, emitter()]));
   const status = { show() {}, dispose() {} };
@@ -83,8 +85,22 @@ function host(t) {
       };
     },
     createStatusBarItem: () => status,
-    showInformationMessage() {},
+    showInformationMessage: text => information.push(text),
     showWarningMessage: text => warnings.push(text),
+    activeTextEditor: options.editorFolder ? { document: { uri: { scheme: 'file', path: '/editor/file.ts' } } } : undefined,
+    createTerminal(creationOptions) {
+      if (options.createError) throw options.createError;
+      const value = terminal(creationOptions.name, false);
+      value.creationOptions = creationOptions;
+      value.show = () => {
+        if (options.showError) throw options.showError;
+        window.activeTerminal = value;
+        events.active.fire(value);
+      };
+      value.dispose = () => { value.disposed = true; events.close.fire(value); };
+      created.push(value);
+      return value;
+    },
     onDidChangeActiveTerminal: events.active.event,
     onDidCloseTerminal: events.close.event,
     onDidStartTerminalShellExecution: events.start.event,
@@ -93,6 +109,8 @@ function host(t) {
   };
   const vscode = {
     window, StatusBarAlignment: { Right: 1 }, ThemeColor: class { constructor(id) { this.id = id; } },
+    TerminalExitReason: { Unknown: 0, Shutdown: 1, Process: 2, User: 3, Extension: 4 },
+    workspace: { workspaceFolders: options.folders, getWorkspaceFolder: () => options.editorFolder },
     commands: { registerCommand(name, callback) { commands.set(name, callback); return { dispose: () => commands.delete(name) }; } },
   };
   const exports = {};
@@ -100,6 +118,7 @@ function host(t) {
   vm.runInNewContext(fs.readFileSync(compiled, 'utf8'), {
     exports,
     require(id) {
+      if (id.startsWith('node:')) return require(id);
       if (id === 'vscode') return vscode;
       if (id === './autoAcceptSession') return {
         AutoAcceptSession: class extends AutoAcceptSession {
@@ -108,21 +127,153 @@ function host(t) {
       };
       return require(path.resolve(__dirname, '../out', id));
     },
+    process: { platform: options.platform ?? 'win32', env: { SystemRoot: 'C:\\Windows' } },
+    setTimeout: clock.scheduler.set,
+    clearTimeout: clock.scheduler.clear,
   }, { filename: compiled });
-  exports.activate({ subscriptions: [] });
+  const context = { subscriptions: [], asAbsolutePath: relative => path.join('C:\\extension space & %LITERAL% ! ^ (中文)', relative) };
+  exports.activate(context);
   t.after(() => exports.deactivate());
   return {
-    a, clock, lines, logs, channels, warnings, events, status, window,
+    a, clock, lines, logs, channels, warnings, information, created, events, status, window,
     records: event => logs.map(log => log.record).filter(record => !event || record.event === event),
     failLogs: () => { throwLogs = true; },
     toggle: () => commands.get('codexAutoAccept.toggle')(),
+    startCmd: () => commands.get('codexAutoAccept.startCmd')(),
     start: (value, target = a) => events.start.fire({ terminal: target, execution: value }),
     end: (value, target = a, exitCode = 0) => events.end.fire({ terminal: target, execution: value, exitCode }),
     deactivate: () => exports.deactivate(),
-    reactivate: () => exports.activate({ subscriptions: [] }),
+    reactivate: () => exports.activate(context),
   };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('CMD command creates a transient Windows terminal with an unexpanded launcher path and defaults OFF', t => {
+  const h = host(t);
+  h.startCmd();
+  assert.equal(h.created.length, 1);
+  const [cmd] = h.created;
+  assert.equal(cmd.creationOptions.name, 'Codex (CMD)');
+  assert.equal(cmd.creationOptions.shellPath, 'C:\\Windows\\System32\\cmd.exe');
+  assert.equal(cmd.creationOptions.shellArgs, '/d /s /v:off /c ""%CODEX_AUTO_ACCEPT_CMD_LAUNCHER%""');
+  assert.equal(cmd.creationOptions.env.CODEX_AUTO_ACCEPT_CMD_LAUNCHER,
+    path.join('C:\\extension space & %LITERAL% ! ^ (中文)', 'resources/cmd-launcher.cmd'));
+  assert.equal(cmd.creationOptions.cwd, require('node:os').homedir());
+  assert.equal(cmd.creationOptions.isTransient, true);
+  assert.match(h.status.text, /: OFF$/);
+  assert.equal(h.records('autoAccept.enabled').length, 0);
+  h.toggle();
+  assert.match(h.status.text, /等待 Codex$/);
+  assert.match(h.status.tooltip, /CMD 啟動器/);
+  assert.equal(h.information.length, 0);
+});
+
+test('CMD working directory prefers the active editor workspace then the first workspace', t => {
+  const first = { uri: { fsPath: 'C:\\first' } };
+  const editorFolder = { uri: { fsPath: 'C:\\second' } };
+  const withEditor = host(t, { folders: [first, editorFolder], editorFolder });
+  withEditor.startCmd();
+  assert.equal(withEditor.created[0].creationOptions.cwd, editorFolder.uri);
+  const noEditor = host(t, { folders: [first, editorFolder] });
+  noEditor.startCmd();
+  assert.equal(noEditor.created[0].creationOptions.cwd, first.uri);
+});
+
+test('CMD launch rejects non-Windows hosts and reports createTerminal failures', t => {
+  const nonWindows = host(t, { platform: 'linux' });
+  nonWindows.startCmd();
+  assert.equal(nonWindows.created.length, 0);
+  assert.match(nonWindows.information[0], /Windows 擴充套件主機/);
+  assert.equal(nonWindows.clock.tasks.size, 0);
+  const failed = host(t, { createError: new Error('shell missing') });
+  failed.startCmd();
+  assert.match(failed.warnings[0], /CMD 終端啟動失敗.*shell missing/);
+  assert.equal(failed.records('watch.error').length, 1);
+  assert.equal(failed.clock.tasks.size, 0);
+  const hidden = host(t, { showError: new Error('cannot show') });
+  hidden.startCmd();
+  assert.match(hidden.warnings[0], /cannot show/);
+  assert.equal(hidden.created[0].disposed, true);
+  assert.equal(hidden.clock.tasks.size, 0);
+});
+
+test('CMD startup timeout disables approval while a recognized session cancels its timer', async t => {
+  const stalled = host(t);
+  stalled.startCmd();
+  stalled.toggle();
+  stalled.clock.advance(15000);
+  assert.match(stalled.status.text, /: OFF$/);
+  assert.match(stalled.warnings[0], /CMD 啟動器未能接上/);
+  assert.equal(stalled.clock.tasks.size, 0);
+  stalled.created[0].exitStatus = { code: 1, reason: 2 };
+  stalled.events.close.fire(stalled.created[0]);
+  assert.equal(stalled.warnings.length, 1);
+  assert.equal(stalled.records('watch.error').length, 1);
+
+  const h = host(t);
+  h.startCmd();
+  const cmd = h.created[0];
+  const running = execution();
+  h.start(running, cmd);
+  assert.equal(h.clock.tasks.size, 0);
+  running.write(frame(approval()));
+  await settle();
+  h.clock.advance(200);
+  assert.equal(cmd.sends.length, 0);
+  h.toggle();
+  h.clock.advance(120);
+  assert.deepEqual(cmd.sends, [['y', false]]);
+  h.clock.advance(15000);
+  assert.equal(h.warnings.length, 0);
+});
+
+test('CMD closes without an end marker cancel pending input and record the process exit code', async t => {
+  const h = host(t);
+  h.startCmd();
+  const cmd = h.created[0];
+  h.toggle();
+  const running = execution();
+  h.start(running, cmd);
+  running.write(frame(approval()));
+  await settle();
+  h.clock.advance(60);
+  cmd.exitStatus = { code: 7, reason: 2 };
+  h.events.close.fire(cmd);
+  h.clock.advance(20000);
+  assert.equal(cmd.sends.length, 0);
+  assert.match(h.status.text, /: OFF$/);
+  assert.equal(h.clock.tasks.size, 0);
+  assert.equal(h.records('session.stopped').at(-1).exitCode, 7);
+  assert.equal(h.records('terminal.closed').at(-1).exitCode, 7);
+  assert.equal(h.warnings.length, 0);
+});
+
+test('missing Codex and early CMD process failures report actionable errors; user close stays quiet', t => {
+  for (const [code, reason, warning] of [[9009, 2, /找不到可執行的 Codex/], [1, 2, /結束碼 1/], [1, 0, /結束碼 1/], [undefined, 3, undefined]]) {
+    const h = host(t);
+    h.startCmd();
+    h.toggle();
+    const cmd = h.created[0];
+    cmd.exitStatus = { code, reason };
+    h.events.close.fire(cmd);
+    h.clock.advance(20000);
+    assert.equal(h.clock.tasks.size, 0);
+    assert.match(h.status.text, /: OFF$/);
+    assert.equal(h.warnings.length, warning ? 1 : 0);
+    if (warning) assert.match(h.warnings[0], warning);
+  }
+});
+
+test('deactivation cancels CMD startup timers without reviving auto-approval', t => {
+  const h = host(t);
+  h.startCmd();
+  h.toggle();
+  h.deactivate();
+  h.clock.advance(20000);
+  assert.equal(h.clock.tasks.size, 0);
+  assert.equal(h.warnings.length, 0);
+  assert.equal(h.created[0].sends.length, 0);
+});
 
 test('ON requires a watched execution; arming an existing terminal shows restart guidance', async t => {
   const h = host(t);
@@ -252,43 +403,52 @@ test('matching shell end and terminal close events cancel pending approvals', as
 });
 
 test('synchronous and asynchronous read failures turn OFF and cannot appear ON when rearmed', async t => {
-  for (const sync of [true, false]) {
-    const h = host(t);
-    h.toggle();
-    const running = execution('codex', sync ? new Error('read failed') : undefined);
-    h.start(running);
-    if (!sync) { running.fail(new Error('stream failed')); await settle(); }
-    assert.match(h.status.text, /: OFF$/);
-    assert.equal(h.warnings.length, 1);
-    h.toggle();
-    assert.match(h.status.text, /等待 Codex$/);
-    h.start(running);
-    assert.equal(running.reads, 1);
+  for (const managedCmd of [false, true]) {
+    for (const sync of [true, false]) {
+      const h = host(t);
+      if (managedCmd) h.startCmd();
+      const target = managedCmd ? h.created[0] : h.a;
+      h.toggle();
+      const running = execution('codex', sync ? new Error('read failed') : undefined);
+      h.start(running, target);
+      if (!sync) { running.fail(new Error('stream failed')); await settle(); }
+      assert.match(h.status.text, /: OFF$/);
+      assert.equal(h.warnings.length, 1);
+      h.toggle();
+      assert.match(h.status.text, /等待 Codex$/);
+      h.start(running, target);
+      assert.equal(running.reads, 1);
+      assert.equal(h.clock.tasks.size, 0);
+    }
   }
 });
 
 test('send failures turn OFF, dispose the failed session and do not retry', async t => {
-  const h = host(t);
-  h.a.sendText = () => { throw new Error('terminal closed'); };
-  h.toggle();
-  const running = execution();
-  h.start(running);
-  running.write(frame(approval()));
-  await settle();
-  h.clock.advance(120);
-  assert.match(h.status.text, /: OFF$/);
-  assert.equal(h.warnings.length, 1);
-  const [failure] = h.records('watch.error');
-  assert.equal(failure.kind, 'command');
-  assert.ok(failure.content.includes('$ echo hello'));
-  assert.equal(h.records('approval.sent').length, 0);
-  assert.equal(h.clock.tasks.size, 0);
-  h.toggle();
-  running.write(frame(approval()));
-  await settle();
-  h.clock.advance(1000);
-  assert.equal(h.warnings.length, 1);
-  assert.match(h.status.text, /等待 Codex$/);
+  for (const managedCmd of [false, true]) {
+    const h = host(t);
+    if (managedCmd) h.startCmd();
+    const target = managedCmd ? h.created[0] : h.a;
+    target.sendText = () => { throw new Error('terminal closed'); };
+    h.toggle();
+    const running = execution();
+    h.start(running, target);
+    running.write(frame(approval()));
+    await settle();
+    h.clock.advance(120);
+    assert.match(h.status.text, /: OFF$/);
+    assert.equal(h.warnings.length, 1);
+    const [failure] = h.records('watch.error');
+    assert.equal(failure.kind, 'command');
+    assert.ok(failure.content.includes('$ echo hello'));
+    assert.equal(h.records('approval.sent').length, 0);
+    assert.equal(h.clock.tasks.size, 0);
+    h.toggle();
+    running.write(frame(approval()));
+    await settle();
+    h.clock.advance(1000);
+    assert.equal(h.warnings.length, 1);
+    assert.match(h.status.text, /等待 Codex$/);
+  }
 });
 
 test('native audit messages are single-line JSON with current operation content for all five kinds', async t => {
